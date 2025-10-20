@@ -12,20 +12,19 @@ app.secret_key = os.environ.get("FLASK_SECRET", "akhila_secret_key_123")
 
 # ----------------- Firebase Initialization -----------------
 try:
-    firebase_config_env = os.getenv("FIREBASE_CONFIG")
-    if firebase_config_env:
-        # Load Firebase credentials from environment variable (Render)
-        cred_dict = json.loads(firebase_config_env)
-        cred = credentials.Certificate(cred_dict)
-    else:
-        # Fallback: local firebase_config.json
-        cred_path = os.path.join(os.path.dirname(__file__), "firebase_config.json")
-        if not os.path.exists(cred_path):
-            raise FileNotFoundError("Place firebase_config.json in project root (service account).")
-        cred = credentials.Certificate(cred_path)
+    # ✅ Load Firebase config from Render Secret File
+    firebase_path = "/etc/secrets/firebase_config.json"
 
+    if not os.path.exists(firebase_path):
+        raise FileNotFoundError("firebase_config.json not found in Render secrets!")
+
+    with open(firebase_path) as f:
+        firebase_config = json.load(f)
+
+    cred = credentials.Certificate(firebase_config)
     firebase_admin.initialize_app(cred)
     db = firestore.client()
+
 except Exception as e:
     raise RuntimeError(f"Firebase initialization failed: {e}")
 
@@ -35,7 +34,6 @@ EXPENSES_COL = "expenses"
 
 # ----------------- Helpers -----------------
 def get_user_by_username(username):
-    """Return dict with user data and id if exists, else None."""
     docs = db.collection(USERS_COL).where("username", "==", username).limit(1).stream()
     for d in docs:
         data = d.to_dict()
@@ -45,7 +43,6 @@ def get_user_by_username(username):
 
 
 def create_user(username, password):
-    """Create user document and return doc id."""
     pw_hash = generate_password_hash(password)
     doc_ref = db.collection(USERS_COL).document()
     doc_ref.set({"username": username, "password": pw_hash, "created_at": firestore.SERVER_TIMESTAMP})
@@ -66,7 +63,6 @@ def add_expense(description, amount, date, category, user_id):
 
 
 def get_expenses(user_id):
-    """Fetch expenses for a user without requiring a composite index."""
     docs = db.collection(EXPENSES_COL).where("user_id", "==", user_id).stream()
     items = []
     for d in docs:
@@ -114,7 +110,7 @@ def register():
         if get_user_by_username(username):
             flash("Username already exists", "error")
             return redirect(url_for("register"))
-        uid = create_user(username, password)
+        create_user(username, password)
         flash("Registration successful. Please login.", "success")
         return redirect(url_for("login"))
     return render_template("register.html")
@@ -166,58 +162,28 @@ def dashboard():
 def add_expense_route():
     if "username" not in session:
         return redirect(url_for("login"))
-    
+
     if request.method == "POST":
         try:
             description = request.form.get("description", "").strip()
             amount = request.form.get("amount", "0")
             date = request.form.get("date") or datetime.now().strftime("%Y-%m-%d")
-
             desc = description.lower()
 
-            food_keywords = [
-                "food", "grocery", "restaurant", "biryani", "pizza", "burger", "coffee", "tea", "snacks",
-                "bread", "milk", "egg", "fruits", "vegetables", "lunch", "dinner", "breakfast", "juice",
-                "icecream", "cake"
-            ]
-            transport_keywords = [
-                "bus", "train", "taxi", "cab", "fuel", "travel", "uber", "ola", "metro", "auto", "petrol",
-                "diesel", "parking", "bike", "cycle", "toll", "flight", "ticket", "transport"
-            ]
-            entertainment_keywords = [
-                "movie", "netflix", "ticket", "cinema", "game", "concert", "show", "music", "spotify",
-                "youtube", "subscription", "theatre", "play", "amusement", "park", "event", "hobby"
-            ]
-            housing_keywords = [
-                "rent", "house", "electricity", "water", "home", "gas", "maintenance", "internet", "wifi",
-                "cleaning", "maid", "repairs", "apartment", "society", "security", "tax", "insurance",
-                "furniture", "decor", "utility"
-            ]
-            health_keywords = [
-                "medicine", "doctor", "hospital", "pharmacy", "clinic", "checkup", "consultation",
-                "insurance", "dental", "eye", "surgery", "vaccine", "therapist", "treatment", "gym",
-                "fitness", "vitamins", "supplements", "diagnosis"
-            ]
-            other_keywords = [
-                "clothes", "books", "stationery", "gift", "toys", "electronics", "mobile", "charger", "bags",
-                "shoes", "cosmetics", "accessories", "jewelry", "decorations", "subscription", "pet",
-                "gardening", "cleaning", "misc"
-            ]
+            # Category detection keywords
+            categories = {
+                "Food": ["food", "grocery", "restaurant", "pizza", "snack", "milk", "bread"],
+                "Transport": ["bus", "fuel", "train", "taxi", "cab", "bike", "diesel", "petrol"],
+                "Entertainment": ["movie", "netflix", "music", "game", "show"],
+                "Housing": ["rent", "electricity", "gas", "wifi", "internet"],
+                "Health": ["doctor", "medicine", "hospital", "gym", "pharmacy"],
+            }
 
-            if any(k in desc for k in food_keywords):
-                category = "Food"
-            elif any(k in desc for k in transport_keywords):
-                category = "Transport"
-            elif any(k in desc for k in entertainment_keywords):
-                category = "Entertainment"
-            elif any(k in desc for k in housing_keywords):
-                category = "Housing"
-            elif any(k in desc for k in health_keywords):
-                category = "Health"
-            elif any(k in desc for k in other_keywords):
-                category = "Other"
-            else:
-                category = "Other"
+            category = "Other"
+            for cat, keywords in categories.items():
+                if any(k in desc for k in keywords):
+                    category = cat
+                    break
 
             add_expense(description, amount, date, category, session["user_id"])
             return jsonify({"status": "success", "description": description, "category": category})

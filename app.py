@@ -5,17 +5,29 @@ from firebase_admin import credentials, firestore
 from datetime import datetime
 import os
 import traceback
+import json
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET", "akhila_secret_key_123")
 
-# Initialize Firebase
-cred_path = os.path.join(os.path.dirname(__file__), "firebase_config.json")
-if not os.path.exists(cred_path):
-    raise FileNotFoundError("Place firebase_config.json in project root (service account).")
-cred = credentials.Certificate(cred_path)
-firebase_admin.initialize_app(cred)
-db = firestore.client()
+# ----------------- Firebase Initialization -----------------
+try:
+    firebase_config_env = os.getenv("FIREBASE_CONFIG")
+    if firebase_config_env:
+        # Load Firebase credentials from environment variable (Render)
+        cred_dict = json.loads(firebase_config_env)
+        cred = credentials.Certificate(cred_dict)
+    else:
+        # Fallback: local firebase_config.json
+        cred_path = os.path.join(os.path.dirname(__file__), "firebase_config.json")
+        if not os.path.exists(cred_path):
+            raise FileNotFoundError("Place firebase_config.json in project root (service account).")
+        cred = credentials.Certificate(cred_path)
+
+    firebase_admin.initialize_app(cred)
+    db = firestore.client()
+except Exception as e:
+    raise RuntimeError(f"Firebase initialization failed: {e}")
 
 USERS_COL = "users"
 EXPENSES_COL = "expenses"
@@ -54,10 +66,7 @@ def add_expense(description, amount, date, category, user_id):
 
 
 def get_expenses(user_id):
-    """
-    Fetch expenses for a user without requiring a composite index.
-    We query only by user_id and then sort locally by created_at (if available).
-    """
+    """Fetch expenses for a user without requiring a composite index."""
     docs = db.collection(EXPENSES_COL).where("user_id", "==", user_id).stream()
     items = []
     for d in docs:
@@ -65,10 +74,9 @@ def get_expenses(user_id):
         doc["id"] = d.id
         items.append(doc)
 
-    # Sort: newest first using created_at if present, fallback to date string
     def sort_key(e):
         if "created_at" in e and e["created_at"] is not None:
-            return e["created_at"].timestamp()  # Firestore timestamp -> seconds
+            return e["created_at"].timestamp()
         try:
             return datetime.strptime(e.get("date", ""), "%Y-%m-%d").timestamp()
         except Exception:
@@ -143,13 +151,12 @@ def dashboard():
         expenses = get_expenses(session["user_id"])
         total = sum(float(e.get("amount", 0)) for e in expenses)
         recent = expenses[:5]
-        # category totals for a small card
         cat_totals = {}
         for e in expenses:
             cat = e.get("category", "Other")
             cat_totals[cat] = cat_totals.get(cat, 0) + float(e.get("amount", 0))
         return render_template("dashboard.html", total=round(total, 2), recent=recent, cat_totals=cat_totals)
-    except Exception as ex:
+    except Exception:
         traceback.print_exc()
         flash("Error loading dashboard", "error")
         return render_template("dashboard.html", total=0, recent=[], cat_totals={})
@@ -168,48 +175,35 @@ def add_expense_route():
 
             desc = description.lower()
 
-            # Food category (20+ items)
             food_keywords = [
                 "food", "grocery", "restaurant", "biryani", "pizza", "burger", "coffee", "tea", "snacks",
                 "bread", "milk", "egg", "fruits", "vegetables", "lunch", "dinner", "breakfast", "juice",
                 "icecream", "cake"
             ]
-
-            # Transport category (20+ items)
             transport_keywords = [
                 "bus", "train", "taxi", "cab", "fuel", "travel", "uber", "ola", "metro", "auto", "petrol",
-                "diesel", "parking", "bike", "cycle", "petrol station", "toll", "flight", "ticket", "transport"
+                "diesel", "parking", "bike", "cycle", "toll", "flight", "ticket", "transport"
             ]
-
-            # Entertainment category (20+ items)
             entertainment_keywords = [
                 "movie", "netflix", "ticket", "cinema", "game", "concert", "show", "music", "spotify",
-                "youtube", "subscription", "theatre", "play", "amusement", "park", "event", "gamepass",
-                "streaming", "vod", "hobby"
+                "youtube", "subscription", "theatre", "play", "amusement", "park", "event", "hobby"
             ]
-
-            # Housing category (20+ items)
             housing_keywords = [
                 "rent", "house", "electricity", "water", "home", "gas", "maintenance", "internet", "wifi",
-                "cleaning", "maid", "repairs", "apartment", "society", "security", "property tax", "insurance",
+                "cleaning", "maid", "repairs", "apartment", "society", "security", "tax", "insurance",
                 "furniture", "decor", "utility"
             ]
-
-            # Health category (20+ items)
             health_keywords = [
-                "medicine", "doctor", "hospital", "pharmacy", "clinic", "checkup", "consultation", "insurance",
-                "dental", "eye", "surgery", "vaccine", "therapist", "treatment", "gym", "fitness", "vitamins",
-                "supplements", "healthcare", "diagnosis"
+                "medicine", "doctor", "hospital", "pharmacy", "clinic", "checkup", "consultation",
+                "insurance", "dental", "eye", "surgery", "vaccine", "therapist", "treatment", "gym",
+                "fitness", "vitamins", "supplements", "diagnosis"
             ]
-
-            # Other category (20+ items)
             other_keywords = [
                 "clothes", "books", "stationery", "gift", "toys", "electronics", "mobile", "charger", "bags",
-                "shoes", "cosmetics", "accessories", "jewelry", "decorations", "hobby", "subscription", "pet",
-                "gardening", "cleaning supplies", "misc"
+                "shoes", "cosmetics", "accessories", "jewelry", "decorations", "subscription", "pet",
+                "gardening", "cleaning", "misc"
             ]
 
-            # Determine category
             if any(k in desc for k in food_keywords):
                 category = "Food"
             elif any(k in desc for k in transport_keywords):
@@ -226,14 +220,10 @@ def add_expense_route():
                 category = "Other"
 
             add_expense(description, amount, date, category, session["user_id"])
-
-            # Return JSON for success message without redirect
             return jsonify({"status": "success", "description": description, "category": category})
-
         except Exception as e:
             traceback.print_exc()
             return jsonify({"status": "error", "message": str(e)})
-
     return render_template("add_expense.html")
 
 
@@ -242,7 +232,6 @@ def all_expenses():
     if "username" not in session:
         return redirect(url_for("login"))
     expenses = get_expenses(session["user_id"])
-    # totals per category for display
     totals = {}
     for e in expenses:
         totals[e.get("category", "Other")] = totals.get(e.get("category", "Other"), 0) + float(e.get("amount", 0))
@@ -275,12 +264,11 @@ def edit_expense(expense_id):
             })
             flash("Expense updated", "success")
             return redirect(url_for("all_expenses"))
-        except Exception as e:
+        except Exception:
             traceback.print_exc()
             flash("Error updating expense", "error")
             return redirect(url_for("all_expenses"))
 
-    # GET: show form with data
     return render_template("edit_expense.html", expense=doc)
 
 
@@ -318,7 +306,6 @@ def summary():
     return render_template("summary.html", labels=labels, values=values)
 
 
-# Recommendations
 @app.route('/recommendations')
 def recommendations():
     if 'username' not in session:
@@ -335,7 +322,6 @@ def recommendations():
 
     percentages = {k:(v/total*100) for k,v in category_sum.items()} if total>0 else {}
 
-    # Custom suggestions per category
     category_tips = {
         "Food": "Try cooking at home, meal prep, or reduce takeout orders.",
         "Transport": "Use public transport, carpool, or walk/cycle for short distances.",
@@ -345,21 +331,18 @@ def recommendations():
         "Other": "Track miscellaneous spending and prioritize essentials over luxuries."
     }
 
-    # Messages for each category based on spending %
     messages = {}
     for cat, perc in percentages.items():
         if perc > 50:
-            # High spending
             messages[cat] = f"💡 Tip: {category_tips.get(cat, 'Reduce unnecessary expenses.')}"
         else:
-            # Under control
             messages[cat] = "💡 Spending is under control ✅ Don't worry."
 
-    # Sort percentages dict by value descending
     sorted_percentages = dict(sorted(percentages.items(), key=lambda x: x[1], reverse=True))
     sorted_messages = {k: messages[k] for k in sorted_percentages.keys()}
 
     return render_template('recommendations.html', percentages=sorted_percentages, messages=sorted_messages)
 
-if __name__ == "__main__":
-    app.run(debug=True)
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)

@@ -1,4 +1,6 @@
-Flask==2.3.2
-firebase-admin==6.0.1
-Werkzeug==2.3.8
-gunicorn==21.2.0
+Flask
+gunicorn
+firebase_admin
+google-cloud-firestore
+google-cloud-storage
+google-api-python-client

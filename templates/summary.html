@@ -1,0 +1,33 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Expense Summary</h2>
+<div class="card chart-card" style="max-width:500px;margin:auto;">
+  <canvas id="summaryChart"></canvas>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+const ctx = document.getElementById('summaryChart').getContext('2d');
+const chart = new Chart(ctx, {
+  type: 'pie',
+  data: {
+    labels: {{ labels|tojson }},
+    datasets: [{
+      label: 'Expenses',
+      data: {{ values|tojson }},
+      backgroundColor: [
+        '#0b63d6', '#2b9fff', '#6cc551', '#ffcd3c', '#ff4d4f', '#9b59b6', '#f39c12'
+      ],
+      borderWidth: 1
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: {
+      legend: { position: 'bottom' },
+      tooltip: { enabled: true }
+    }
+  }
+});
+</script>
+{% endblock %}

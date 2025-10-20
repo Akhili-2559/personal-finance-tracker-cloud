@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Edit Expense{% endblock %}
+{% block content %}
+<h2 class="page-title">Edit Expense</h2>
+
+<div class="center-card">
+  <div class="card form-card">
+    <form method="POST">
+      <label>Description</label>
+      <input name="description" value="{{ expense.description }}" required />
+        <br>
+      <label>Amount (₹)</label>
+      <input name="amount" type="number" step="0.01" value="{{ expense.amount }}" required />
+
+      <label>Category</label>
+      <input name="category" value="{{ expense.category }}" required />
+
+      <label>Date</label>
+      <input name="date" type="date" value="{{ expense.date }}" required />
+
+      <div class="row">
+        <button type="submit" class="btn primary">Update</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

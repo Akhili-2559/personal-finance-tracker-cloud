@@ -12,25 +12,26 @@ app.secret_key = os.environ.get("FLASK_SECRET", "akhila_secret_key_123")
 
 # ----------------- Firebase Initialization -----------------
 try:
-    # ✅ Load Firebase config from Render Secret File
+    # Render Secret File
     firebase_path = "/etc/secrets/firebase_config.json"
+    if os.path.exists(firebase_path):
+        with open(firebase_path) as f:
+            cred_dict = json.load(f)
+        cred = credentials.Certificate(cred_dict)
+    else:
+        # fallback to local file
+        cred_path = os.path.join(os.path.dirname(__file__), "firebase_config.json")
+        if not os.path.exists(cred_path):
+            raise FileNotFoundError("Place firebase_config.json in project root (service account).")
+        cred = credentials.Certificate(cred_path)
 
-    if not os.path.exists(firebase_path):
-        raise FileNotFoundError("firebase_config.json not found in Render secrets!")
-
-    with open(firebase_path) as f:
-        firebase_config = json.load(f)
-
-    cred = credentials.Certificate(firebase_config)
     firebase_admin.initialize_app(cred)
     db = firestore.client()
-
 except Exception as e:
     raise RuntimeError(f"Firebase initialization failed: {e}")
 
 USERS_COL = "users"
 EXPENSES_COL = "expenses"
-
 
 # ----------------- Helpers -----------------
 def get_user_by_username(username):
@@ -41,13 +42,11 @@ def get_user_by_username(username):
         return data
     return None
 
-
 def create_user(username, password):
     pw_hash = generate_password_hash(password)
     doc_ref = db.collection(USERS_COL).document()
     doc_ref.set({"username": username, "password": pw_hash, "created_at": firestore.SERVER_TIMESTAMP})
     return doc_ref.id
-
 
 def add_expense(description, amount, date, category, user_id):
     doc_ref = db.collection(EXPENSES_COL).document()
@@ -60,7 +59,6 @@ def add_expense(description, amount, date, category, user_id):
         "created_at": firestore.SERVER_TIMESTAMP
     })
     return doc_ref.id
-
 
 def get_expenses(user_id):
     docs = db.collection(EXPENSES_COL).where("user_id", "==", user_id).stream()
@@ -81,7 +79,6 @@ def get_expenses(user_id):
     items.sort(key=sort_key, reverse=True)
     return items
 
-
 def get_expense_by_id(expense_id):
     doc = db.collection(EXPENSES_COL).document(expense_id).get()
     if doc.exists:
@@ -90,14 +87,12 @@ def get_expense_by_id(expense_id):
         return d
     return None
 
-
 # ----------------- Routes -----------------
 @app.route("/")
 def home():
     if "username" in session:
         return redirect(url_for("dashboard"))
     return redirect(url_for("login"))
-
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
@@ -115,7 +110,6 @@ def register():
         return redirect(url_for("login"))
     return render_template("register.html")
 
-
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
@@ -131,13 +125,11 @@ def login():
         return redirect(url_for("login"))
     return render_template("login.html")
 
-
 @app.route("/logout")
 def logout():
     session.clear()
     flash("Logged out successfully", "success")
     return redirect(url_for("login"))
-
 
 @app.route("/dashboard")
 def dashboard():
@@ -157,12 +149,11 @@ def dashboard():
         flash("Error loading dashboard", "error")
         return render_template("dashboard.html", total=0, recent=[], cat_totals={})
 
-
+# ----------------- Add Expense with 20+ items per category -----------------
 @app.route("/add_expense", methods=["GET", "POST"])
 def add_expense_route():
     if "username" not in session:
         return redirect(url_for("login"))
-
     if request.method == "POST":
         try:
             description = request.form.get("description", "").strip()
@@ -170,20 +161,38 @@ def add_expense_route():
             date = request.form.get("date") or datetime.now().strftime("%Y-%m-%d")
             desc = description.lower()
 
-            # Category detection keywords
-            categories = {
-                "Food": ["food", "grocery", "restaurant", "pizza", "snack", "milk", "bread"],
-                "Transport": ["bus", "fuel", "train", "taxi", "cab", "bike", "diesel", "petrol"],
-                "Entertainment": ["movie", "netflix", "music", "game", "show"],
-                "Housing": ["rent", "electricity", "gas", "wifi", "internet"],
-                "Health": ["doctor", "medicine", "hospital", "gym", "pharmacy"],
-            }
+            # Food 20+
+            food_keywords = ["food","grocery","restaurant","biryani","pizza","burger","coffee","tea","snacks","bread","milk","egg","fruits","vegetables","lunch","dinner","breakfast","juice","icecream","cake","noodles","sandwich"]
 
-            category = "Other"
-            for cat, keywords in categories.items():
-                if any(k in desc for k in keywords):
-                    category = cat
-                    break
+            # Transport 20+
+            transport_keywords = ["bus","train","taxi","cab","fuel","travel","uber","ola","metro","auto","petrol","diesel","parking","bike","cycle","toll","flight","ticket","transport","rickshaw","car"]
+
+            # Entertainment 20+
+            entertainment_keywords = ["movie","netflix","ticket","cinema","game","concert","show","music","spotify","youtube","subscription","theatre","play","amusement","park","event","hobby","streaming","vod","gamepass","karaoke","puzzle"]
+
+            # Housing 20+
+            housing_keywords = ["rent","house","electricity","water","home","gas","maintenance","internet","wifi","cleaning","maid","repairs","apartment","society","security","tax","insurance","furniture","decor","utility","garden","roof"]
+
+            # Health 20+
+            health_keywords = ["medicine","doctor","hospital","pharmacy","clinic","checkup","consultation","insurance","dental","eye","surgery","vaccine","therapist","treatment","gym","fitness","vitamins","supplements","diagnosis","therapy","yoga","exercise"]
+
+            # Other 20+
+            other_keywords = ["clothes","books","stationery","gift","toys","electronics","mobile","charger","bags","shoes","cosmetics","accessories","jewelry","decorations","subscription","pet","gardening","cleaning","misc","tools","craft","hobbyitems"]
+
+            if any(k in desc for k in food_keywords):
+                category = "Food"
+            elif any(k in desc for k in transport_keywords):
+                category = "Transport"
+            elif any(k in desc for k in entertainment_keywords):
+                category = "Entertainment"
+            elif any(k in desc for k in housing_keywords):
+                category = "Housing"
+            elif any(k in desc for k in health_keywords):
+                category = "Health"
+            elif any(k in desc for k in other_keywords):
+                category = "Other"
+            else:
+                category = "Other"
 
             add_expense(description, amount, date, category, session["user_id"])
             return jsonify({"status": "success", "description": description, "category": category})
@@ -192,7 +201,7 @@ def add_expense_route():
             return jsonify({"status": "error", "message": str(e)})
     return render_template("add_expense.html")
 
-
+# ----------------- Other Routes -----------------
 @app.route("/all_expenses")
 def all_expenses():
     if "username" not in session:
@@ -202,7 +211,6 @@ def all_expenses():
     for e in expenses:
         totals[e.get("category", "Other")] = totals.get(e.get("category", "Other"), 0) + float(e.get("amount", 0))
     return render_template("all_expenses.html", expenses=expenses, totals=totals)
-
 
 @app.route("/edit_expense/<expense_id>", methods=["GET", "POST"])
 def edit_expense(expense_id):
@@ -215,7 +223,6 @@ def edit_expense(expense_id):
     if doc.get("user_id") != session["user_id"]:
         flash("Permission denied", "error")
         return redirect(url_for("all_expenses"))
-
     if request.method == "POST":
         try:
             description = request.form.get("description", "").strip()
@@ -234,9 +241,7 @@ def edit_expense(expense_id):
             traceback.print_exc()
             flash("Error updating expense", "error")
             return redirect(url_for("all_expenses"))
-
     return render_template("edit_expense.html", expense=doc)
-
 
 @app.route("/delete_expense/<expense_id>", methods=["POST"])
 def delete_expense(expense_id):
@@ -254,7 +259,6 @@ def delete_expense(expense_id):
         traceback.print_exc()
         return jsonify({"status": "error", "message": str(e)}), 500
 
-
 @app.route("/summary")
 def summary():
     if "username" not in session:
@@ -271,12 +275,10 @@ def summary():
     values = [round(v, 2) for v in totals.values()]
     return render_template("summary.html", labels=labels, values=values)
 
-
 @app.route('/recommendations')
 def recommendations():
     if 'username' not in session:
         return redirect(url_for('login'))
-
     expenses = get_expenses(session['user_id'])
     category_sum = {}
     total = 0
@@ -285,9 +287,7 @@ def recommendations():
         total += amt
         cat = e.get('category', 'Other')
         category_sum[cat] = category_sum.get(cat, 0) + amt
-
     percentages = {k:(v/total*100) for k,v in category_sum.items()} if total>0 else {}
-
     category_tips = {
         "Food": "Try cooking at home, meal prep, or reduce takeout orders.",
         "Transport": "Use public transport, carpool, or walk/cycle for short distances.",
@@ -296,19 +296,15 @@ def recommendations():
         "Health": "Look for affordable healthcare options, generic medicines, and preventive care.",
         "Other": "Track miscellaneous spending and prioritize essentials over luxuries."
     }
-
     messages = {}
     for cat, perc in percentages.items():
         if perc > 50:
             messages[cat] = f"💡 Tip: {category_tips.get(cat, 'Reduce unnecessary expenses.')}"
         else:
             messages[cat] = "💡 Spending is under control ✅ Don't worry."
-
     sorted_percentages = dict(sorted(percentages.items(), key=lambda x: x[1], reverse=True))
     sorted_messages = {k: messages[k] for k in sorted_percentages.keys()}
-
     return render_template('recommendations.html', percentages=sorted_percentages, messages=sorted_messages)
-
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
